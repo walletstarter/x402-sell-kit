@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "check": "tsc --noEmit",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "refresh-check": "node refresh-check.mjs"
   },
   "dependencies": {
     "@coinbase/x402": "2.1.0",

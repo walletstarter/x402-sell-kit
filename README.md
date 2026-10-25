@@ -129,10 +129,36 @@ own wallets, show as `deposits_usdc`, never income. "Profit" appears only when t
 positive and its coverage is current. Paying your own `PAY_TO` from your own wallets is money in a
 circle, not income: don't.
 
+## 7. Refresh only when sales paid for it
+
+Every refresh costs you the bundle's inputs again. One rule keeps that safe: **refresh a bundle
+only after its own sales since its last upload have paid for the refresh.** No sales, no spending,
+and the bundle stays on sale as it is.
+
+The Worker counts settled sales per topic: a sale counts only after the payment settled and the
+bundle was served. Reads paid by your own wallets, such as tests and listing payments, never
+count once you list those wallets in `OWN_WALLETS` in `wrangler.toml`. The count is private:
+`GET /stats` with your upload token. Uploading a topic again starts its count over.
+
+To apply the rule, copy `refresh-costs.example.json` to `refresh-costs.json` and set what one
+refresh of each topic costs you in USDC. Then, once a day:
+
+```
+npm run refresh-check -- --worker https://<your-worker>.workers.dev
+```
+
+It reads `UPLOAD_TOKEN` from the environment or `.dev.vars`, sends it only to your Worker, and
+prints each topic as `REFRESH` or `waiting`. It only reads: your agent does the refresh and the
+upload, as in steps 1 and 3. Two sales in the same instant can count as one, so the count can run
+low, never high.
+
 ## Files
 
-- `src/index.ts`: the Worker (free topic list, token-guarded upload, the x402 paywall, the bundle).
+- `src/index.ts`: the Worker (free topic list, token-guarded upload, the x402 paywall, the bundle,
+  your private sales count).
+- `src/sales.ts`: sales per topic, your own wallets left out (step 7).
 - `src/cors.ts`: the CORS headers for browser buyers, kept on every `/bundle` answer.
+- `refresh-check.mjs` and `refresh-costs.example.json`: the refresh-when-paid check (step 7).
 - `wrangler.toml`: public config only. Secrets: `PAY_TO`, `UPLOAD_TOKEN`, and on mainnet
   `CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`.
 - `.dev.vars.example`: the values the deploy page asks for; copy it to `.dev.vars` for local runs.

@@ -11,6 +11,7 @@ import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { createFacilitatorConfig } from '@coinbase/x402';
 import { ALLOW_HEADERS, ALLOW_METHODS, allowedOrigins, allowOrigin, EXPOSE_HEADERS, keepCors, UPLOAD_ALLOW_HEADERS, UPLOAD_ALLOW_METHODS } from './cors';
+import { countSale, readCount, salesSince } from './sales';
 
 interface Env {
   BUNDLES: KVNamespace; // your bundles, one key per topic
@@ -24,6 +25,12 @@ interface Env {
   UPLOAD_TOKEN: string; // secret: a long random string only your agent knows, for uploads
   CORS_ORIGINS?: string; // optional: comma-separated web origins whose pages may buy (browser wallets)
   DEFAULT_TOPIC?: string; // optional: the topic a bare GET /bundle serves (each bundle is also sold at /bundle/<topic>; README, step 5)
+  OWN_WALLETS?: string; // optional: your own paying wallets, comma-separated; their reads are never counted as sales (README, step 7)
+}
+
+interface BundleMeta {
+  updated_at: string;
+  reads_at_upload?: number; // the topic's sales count when it was uploaded: "sales since" counts from here
 }
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -163,7 +170,7 @@ app.use('/upload/*', async (c, next) => {
 
 // Free: what is on sale, so buyers (and the Bazaar) can see topics and freshness before paying.
 app.get('/', async (c) => {
-  const list = await c.env.BUNDLES.list<{ updated_at: string }>();
+  const list = await c.env.BUNDLES.list<BundleMeta>();
   return c.json({
     service: 'x402 resell worker',
     endpoint: '/bundle/<topic>',
@@ -172,8 +179,31 @@ app.get('/', async (c) => {
     price_usdc: c.env.PRICE_USDC,
     network: c.env.NETWORK,
     pay_to: c.env.PAY_TO,
-    topics: list.keys.map((k) => ({ topic: k.name, url: `/bundle/${k.name}`, updated_at: k.metadata?.updated_at ?? null })),
+    topics: list.keys
+      .filter((k) => TOPIC.test(k.name)) // bundles only, not the sales counters (src/sales.ts)
+      .map((k) => ({ topic: k.name, url: `/bundle/${k.name}`, updated_at: k.metadata?.updated_at ?? null })),
   });
+});
+
+// Yours only: settled sales per topic, in total and since the topic's last upload (README, step 7).
+// Bearer UPLOAD_TOKEN. `npm run refresh-check` reads it.
+app.get('/stats', async (c) => {
+  readConfig(c.env);
+  if (!sameToken(c.req.header('Authorization') ?? '', `Bearer ${c.env.UPLOAD_TOKEN}`)) return c.json({ error: 'unauthorized' }, 401);
+  const list = await c.env.BUNDLES.list<BundleMeta>();
+  const topics = [];
+  for (const k of list.keys.filter((k) => TOPIC.test(k.name))) {
+    const r = await readCount(c.env.BUNDLES, k.name);
+    topics.push({
+      topic: k.name,
+      updated_at: k.metadata?.updated_at ?? null,
+      reads_total: r.count,
+      reads_since_update: salesSince(r.count, k.metadata?.reads_at_upload),
+      last_read_at: r.last_at,
+    });
+  }
+  c.header('Cache-Control', 'no-store');
+  return c.json({ price_usdc: c.env.PRICE_USDC, topics });
 });
 
 // Yours only: your agent uploads a bundle it assembled. Bearer UPLOAD_TOKEN.
@@ -191,7 +221,9 @@ app.put('/upload/:topic', async (c) => {
     return c.json({ error: 'the bundle must be JSON' }, 400);
   }
   const updated_at = new Date().toISOString();
-  await c.env.BUNDLES.put(topic, text, { metadata: { updated_at } });
+  // Remember the sales count at this upload: "sales since the last refresh" counts from here.
+  const meta: BundleMeta = { updated_at, reads_at_upload: (await readCount(c.env.BUNDLES, topic)).count };
+  await c.env.BUNDLES.put(topic, text, { metadata: meta });
   return c.json({ topic, updated_at, bytes: text.length });
 });
 
@@ -206,11 +238,14 @@ async function paid(c: Context<App>, next: Next, topic: string, route: 'GET /bun
   // A failed settlement is answered with a fresh Response that carries none of the headers set
   // above (src/cors.ts): put the allowed origin back, or a browser buyer sees "Failed to fetch".
   keepCors(c.res.headers, c.req.header('Origin'), allowedOrigins(c.env.CORS_ORIGINS));
+  // Count the sale only once it settled: a 200 carrying the facilitator's receipt.
+  const receipt = c.res.headers.get('PAYMENT-RESPONSE');
+  if (c.res.status === 200 && receipt) c.executionCtx.waitUntil(countSale(c.env.BUNDLES, topic, receipt, c.env.OWN_WALLETS));
 }
 
 /** Runs only after the buyer's payment verified; the payment settles only on this 200. */
 async function serve(c: Context<App>, topic: string): Promise<Response> {
-  const hit = await c.env.BUNDLES.getWithMetadata<{ updated_at: string }>(topic);
+  const hit = await c.env.BUNDLES.getWithMetadata<BundleMeta>(topic);
   if (hit.value === null) return c.json({ error: 'unknown topic; you were not charged' }, 404);
   return c.json({ topic, updated_at: hit.metadata?.updated_at ?? null, bundle: JSON.parse(hit.value) });
 }
