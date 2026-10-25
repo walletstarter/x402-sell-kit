@@ -1,0 +1,28 @@
+# Your Worker, on YOUR Cloudflare account. Nothing here is a secret; secrets go in
+# `npx wrangler secret put NAME` (or .dev.vars locally, which you must not commit).
+name = "x402-resell-worker"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Your bundles. The Deploy to Cloudflare button creates this namespace for you and fills in the id;
+# by hand: `npx wrangler kv namespace create BUNDLES` and paste its id here.
+[[kv_namespaces]]
+binding = "BUNDLES"
+id = "replace-with-your-kv-namespace-id"
+
+# Your receiving wallet, PAY_TO, is not in [vars]: the Deploy to Cloudflare page asks for it (from
+# .dev.vars.example), or set it by hand with `npx wrangler secret put PAY_TO` (locally: .dev.vars).
+# It is a public address, kept like a secret only so the one-click flow can ask for it; a var of the
+# same name here would override what you entered.
+[vars]
+# What one bundle read costs. Keep it above what the bundle cost you, divided by the reads you expect.
+PRICE_USDC = "0.02"
+# Test on Base Sepolia first; switch to "eip155:8453" for real money.
+NETWORK = "eip155:84532"
+DESCRIPTION = "Curated JSON bundles from several x402 sources, one call each."
+# Optional but needed for the x402 Bazaar: the topic a bare GET /bundle serves. Coinbase lists
+# /bundle without its query, and only if that answers 402 unpaid (unset = 404, never listed).
+# DEFAULT_TOPIC = "base-usdc-daily"
+# Optional: web origins whose pages may pay from a browser wallet, comma-separated (unset = no CORS).
+# CORS_ORIGINS = "https://app.makememoneynomistakes.ai"

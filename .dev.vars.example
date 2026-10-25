@@ -1,0 +1,13 @@
+# The two values the Deploy to Cloudflare page asks for. By hand: `npx wrangler secret put NAME`.
+# For local runs copy this file to .dev.vars and fill it in; never commit .dev.vars.
+
+# Your receiving wallet's PUBLIC address (0x...). Buyers pay here; this is your income.
+PAY_TO=
+
+# 32+ random characters only your agent knows; it authorizes PUT /upload/<topic>.
+UPLOAD_TOKEN=
+
+# Base mainnet only (NETWORK = "eip155:8453" in wrangler.toml): your own CDP API key for the CDP
+# facilitator. Not needed on Base Sepolia. Add them later with `npx wrangler secret put`.
+# CDP_API_KEY_ID=
+# CDP_API_KEY_SECRET=
