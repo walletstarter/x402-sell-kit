@@ -80,8 +80,11 @@ Browser buyers (optional): a web page paying from the visitor's own wallet, such
 `https://app.makememoneynomistakes.ai`, needs CORS. Set `CORS_ORIGINS` to the page origins you
 allow, comma-separated; `/bundle` then lets them send `PAYMENT-SIGNATURE` and read
 `PAYMENT-REQUIRED` / `PAYMENT-RESPONSE`, on every answer including a failed settlement (`src/cors.ts`
-puts the headers back after the paywall, which otherwise drops them on that path). Unset, there is
-no CORS and agents work as before.
+puts the headers back after the paywall, which otherwise drops them on that path). The same origins
+may read `GET /` and upload with `PUT /upload/<topic>`: that is how the hosted earn page at
+`https://app.makememoneynomistakes.ai` uploads a run's bundle to your kit with the token you type
+there (it travels from your browser to this Worker, never through them) and pays your listing once.
+Unset, there is no CORS and agents work as before.
 
 ## 4. Go live on Base
 

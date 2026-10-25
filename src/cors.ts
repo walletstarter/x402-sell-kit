@@ -11,6 +11,9 @@
 export const ALLOW_METHODS = 'GET,OPTIONS';
 export const ALLOW_HEADERS = 'PAYMENT-SIGNATURE,Content-Type';
 export const EXPOSE_HEADERS = 'PAYMENT-REQUIRED,PAYMENT-RESPONSE';
+/** The upload, for the hosted earn page: the visitor's own token travels from their browser to this Worker. */
+export const UPLOAD_ALLOW_METHODS = 'PUT,OPTIONS';
+export const UPLOAD_ALLOW_HEADERS = 'Authorization,Content-Type';
 
 /** CORS_ORIGINS as a list of origins; empty = no CORS. */
 export function allowedOrigins(value: string | undefined): string[] {

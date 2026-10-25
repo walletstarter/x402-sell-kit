@@ -10,7 +10,7 @@ import { HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { createFacilitatorConfig } from '@coinbase/x402';
-import { ALLOW_HEADERS, ALLOW_METHODS, allowedOrigins, allowOrigin, EXPOSE_HEADERS, keepCors } from './cors';
+import { ALLOW_HEADERS, ALLOW_METHODS, allowedOrigins, allowOrigin, EXPOSE_HEADERS, keepCors, UPLOAD_ALLOW_HEADERS, UPLOAD_ALLOW_METHODS } from './cors';
 
 interface Env {
   BUNDLES: KVNamespace; // your bundles, one key per topic
@@ -145,6 +145,20 @@ app.use('/bundle', async (c, next) => {
     exposeHeaders: EXPOSE_HEADERS.split(','),
     maxAge: 600,
   })(c, next);
+});
+
+// The same origins may also read what you sell (GET /) and upload bundles from the browser (the hosted
+// earn page at app.makememoneynomistakes.ai: the visitor types their own UPLOAD_TOKEN there, and it
+// travels only from their browser to this Worker). Unset = no CORS, as before.
+app.use('/', async (c, next) => {
+  const allowed = allowedOrigins(c.env.CORS_ORIGINS);
+  if (!allowed.length) return next();
+  return cors({ origin: (origin) => allowOrigin(origin, allowed), allowMethods: ALLOW_METHODS.split(','), maxAge: 600 })(c, next);
+});
+app.use('/upload/*', async (c, next) => {
+  const allowed = allowedOrigins(c.env.CORS_ORIGINS);
+  if (!allowed.length) return next();
+  return cors({ origin: (origin) => allowOrigin(origin, allowed), allowMethods: UPLOAD_ALLOW_METHODS.split(','), allowHeaders: UPLOAD_ALLOW_HEADERS.split(','), maxAge: 600 })(c, next);
 });
 
 // Free: what is on sale, so buyers (and the Bazaar) can see topics and freshness before paying.
