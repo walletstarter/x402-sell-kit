@@ -24,5 +24,8 @@ DESCRIPTION = "Curated JSON bundles from several x402 sources, one call each."
 # Optional but needed for the x402 Bazaar: the topic a bare GET /bundle serves. Coinbase lists
 # /bundle without its query, and only if that answers 402 unpaid (unset = 404, never listed).
 # DEFAULT_TOPIC = "base-usdc-daily"
+# Optional: your own paying wallets, comma-separated. Reads they pay for (tests, listing payments)
+# are never counted as sales in GET /stats (README, step 7).
+# OWN_WALLETS = "0xYourOtherWallet"
 # Optional: web origins whose pages may pay from a browser wallet, comma-separated (unset = no CORS).
 # CORS_ORIGINS = "https://app.makememoneynomistakes.ai"
