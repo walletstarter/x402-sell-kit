@@ -20,6 +20,8 @@ id = "replace-with-your-kv-namespace-id"
 PRICE_USDC = "0.02"
 # Test on Base Sepolia first; switch to "eip155:8453" for real money.
 NETWORK = "eip155:84532"
+# At most 400 characters: payers echo it back inside each payment and the facilitator refuses a
+# longer one, so every sale would fail. The Worker refuses to serve past 400.
 DESCRIPTION = "Curated JSON bundles from several x402 sources, one call each."
 # Optional but needed for the x402 Bazaar: the topic a bare GET /bundle serves. Coinbase lists
 # /bundle without its query, and only if that answers 402 unpaid (unset = 404, never listed).

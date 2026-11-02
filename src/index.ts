@@ -41,6 +41,11 @@ interface BundleMeta {
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const TOPIC = /^[a-z0-9-]{1,64}$/;
 const MAX_BUNDLE_BYTES = 100_000;
+// Every payer echoes a route's description back inside its payment, and the CDP facilitator refuses
+// the whole payment when that text passes about 510 characters (measured 2026-11-02: 500 passed, 511
+// did not), so a long DESCRIPTION silently fails every sale. A route adds " This route serves the
+// <topic> bundle." (at most 95 characters) to it, so the configured line stops at 400.
+export const DESCRIPTION_MAX = 400;
 
 /** Decimal USDC string to 6-decimal atomic units, or null when malformed. */
 function atomic(usdc: string): bigint | null {
@@ -59,6 +64,10 @@ function readConfig(env: Env): bigint {
   }
   const charge = atomic(env.PRICE_USDC);
   if (!charge) throw new Error('PRICE_USDC must be a positive decimal like "0.02"');
+  if (typeof env.DESCRIPTION !== 'string' || !env.DESCRIPTION.trim()) throw new Error('DESCRIPTION must be one plain line');
+  if (env.DESCRIPTION.length > DESCRIPTION_MAX) {
+    throw new Error(`DESCRIPTION is ${env.DESCRIPTION.length} characters; keep it at most ${DESCRIPTION_MAX}: payers echo it back and the facilitator refuses a longer one, so every sale would fail`);
+  }
   if (!env.UPLOAD_TOKEN || env.UPLOAD_TOKEN.length < 32) throw new Error('Set UPLOAD_TOKEN (32+ random characters) as a Worker secret');
   return charge;
 }

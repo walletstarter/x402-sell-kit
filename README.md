@@ -102,7 +102,10 @@ Unset, there is no CORS and agents work as before.
 The route declares Bazaar discovery metadata (`declareDiscoveryExtension`). The CDP Bazaar indexes
 a route after its first payment settled through the CDP facilitator, usually within 15 minutes.
 Keep `DESCRIPTION` one plain line that describes the endpoint; the Bazaar screens out text that
-instructs agents.
+instructs agents. Keep it at most 400 characters: every payer echoes it back inside its payment, and
+the CDP facilitator refuses the payment outright when a route's text passes about 510 characters
+(measured 2026-11-02), so a long line would fail every sale without a word. The Worker refuses to
+serve past 400 instead.
 
 Two things must hold, or the payment settles and nothing is listed:
 
