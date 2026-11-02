@@ -1,6 +1,8 @@
 // Sales per topic, for the refresh-when-paid rule (README, step 7): refresh a bundle only after its
 // own sales since its last upload have paid for that refresh. Only settled payments count, and never
-// your own wallets (OWN_WALLETS). No Hono and no x402 here, so it can be tested alone.
+// your own wallets (OWN_WALLETS). Fee reads (v2: one in twenty, paid to makememoneynomistakes.ai)
+// count as reads of the topic and are counted apart in fee_reads, so you can see both. No Hono and no
+// x402 here, so it can be tested alone.
 
 /** The part of Workers KV this file uses. */
 export interface CountStore {
@@ -13,14 +15,18 @@ export const READS_PREFIX = 'reads:';
 export const readsKey = (topic: string): string => `${READS_PREFIX}${topic}`;
 
 export interface Reads {
+  /** Settled reads of the topic, your own wallets' left out, fee reads included. */
   count: number;
+  /** Of those, the reads paid to makememoneynomistakes.ai as the fee (v2). */
+  fee_reads: number;
   last_at: string | null;
 }
 
+const whole = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+
 export async function readCount(store: CountStore, topic: string): Promise<Reads> {
-  const v = (await store.get(readsKey(topic), 'json')) as { count?: unknown; last_at?: unknown } | null;
-  const count = typeof v?.count === 'number' && Number.isFinite(v.count) && v.count > 0 ? Math.floor(v.count) : 0;
-  return { count, last_at: typeof v?.last_at === 'string' ? v.last_at : null };
+  const v = (await store.get(readsKey(topic), 'json')) as { count?: unknown; fee_reads?: unknown; last_at?: unknown } | null;
+  return { count: whole(v?.count), fee_reads: whole(v?.fee_reads), last_at: typeof v?.last_at === 'string' ? v.last_at : null };
 }
 
 /** OWN_WALLETS as lowercase addresses. */
@@ -39,14 +45,15 @@ export function receiptPayer(header: string): string {
 }
 
 /**
- * Counts one settled sale of `topic`, unless one of your own wallets paid. Returns whether it counted.
+ * Counts one settled sale of `topic`, unless one of your own wallets paid. `fee`: this read was paid to
+ * makememoneynomistakes.ai (counted, and counted apart). Returns whether it counted.
  * KV is not atomic: two sales in the same instant can count as one. It can undercount, never overcount.
  */
-export async function countSale(store: CountStore, topic: string, receipt: string, own: string | undefined, now = new Date()): Promise<boolean> {
+export async function countSale(store: CountStore, topic: string, receipt: string, own: string | undefined, now = new Date(), fee = false): Promise<boolean> {
   const payer = receiptPayer(receipt);
   if (payer && ownWallets(own).includes(payer)) return false;
   const was = await readCount(store, topic);
-  await store.put(readsKey(topic), JSON.stringify({ count: was.count + 1, last_at: now.toISOString() }));
+  await store.put(readsKey(topic), JSON.stringify({ count: was.count + 1, fee_reads: was.fee_reads + (fee ? 1 : 0), last_at: now.toISOString() }));
   return true;
 }
 

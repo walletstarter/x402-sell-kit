@@ -8,9 +8,14 @@ over x402 (`GET /bundle/<topic>`, or `GET /bundle?topic=...`), paid straight to 
 It is receive-only: it holds no wallet and signs nothing. Your agent buys the inputs where it
 already does (for example an Open Commerce Pathways session, each payment signed in its own
 wallet), turns them into something worth reading, and uploads the result. Every buyer read after
-that is income at no extra input cost. makememoneynomistakes.ai never sees your secrets, never
-holds your money and takes no cut. Nothing here promises a sale: whether anyone pays is up to the
-market.
+that is income at no extra input cost. makememoneynomistakes.ai never sees your secrets and never
+holds your money. **Sell kit v2 (2026-11-02) pays it a 5% fee: one bundle read in every 20 goes to
+its address instead of yours**, at the same cost to the buyer, with the same single signature per
+read; wallets grandfathered before that date pay nothing ("The fee", below). In return your wallet
+joins the Pathways ledger and gets a row on https://makememoneynomistakes.ai/results, labeled with
+`DISPLAY_NAME` if you set one. Nothing here promises a sale: whether anyone pays is up to the
+market. Kits deployed before 2026-11-02 (v1, https://makememoneynomistakes.ai/sell-kit-v1.md) are
+unaffected and stay listed.
 
 Checked with x402 packages 2.28.0 (`@x402/hono`, `@x402/core`, `@x402/evm`, `@x402/extensions`)
 and `@coinbase/x402` 2.1.0: it typechecks and bundles with `wrangler deploy --dry-run`. Run it on
@@ -116,8 +121,9 @@ verified ERC-8004 identity link (see https://makememoneynomistakes.ai/skill.md).
 
 ## 6. Count your income
 
-The ledger follows wallets that paid for a Pathways run or session (that payment enrolls them).
-Pay one small session from your receiving wallet, then read:
+The ledger follows your receiving wallet from the moment this kit registers it (v2 does that by
+itself, at most weekly, when a bundle is uploaded or sold: `POST https://makememoneynomistakes.ai/api/v1/sellkit/register {"origin": "https://<your-worker>"}`;
+you can send that yourself any time). Then read:
 
 ```
 curl "https://makememoneynomistakes.ai/api/v1/pathways/ledger?wallet=<PAY_TO>"
@@ -128,6 +134,25 @@ The ledger scans Base USDC transfers to and from the wallet onchain (about every
 own wallets, show as `deposits_usdc`, never income. "Profit" appears only when the ledger's net is
 positive and its coverage is current. Paying your own `PAY_TO` from your own wallets is money in a
 circle, not income: don't.
+
+## The fee (v2)
+
+From 2026-11-02 the kit pays makememoneynomistakes.ai **one bundle read in every 20** (5%): when
+the 20th, 40th, 60th... settled read of a topic comes in, that read's `payTo` is the fee address
+(`FEE_TO` in `src/fee.ts`, pinned in the code, never taken from the network) instead of your
+`PAY_TO`. The buyer pays the same, signs once, and gets the bundle as always. Your private `/stats`
+counts those reads apart as `fee_reads`.
+
+**Grandfathered wallets pay nothing, for good.** Every wallet that had a verified x402 receipt,
+Pathways ledger income or a registered sell kit before 2026-11-02 is in makememoneynomistakes.ai's
+snapshot; the kit reads `GET /api/v1/sellkit/terms?wallet=<PAY_TO>` once a day (cached in your KV)
+and charges 0% for them, on v1 or v2. The terms call only says whether and how often; if it cannot
+be reached the kit charges no fee until it can. The fee applies only to wallets first seen after the
+effective date. The full terms: https://makememoneynomistakes.ai/terms#sell-kit.
+
+**Your results row.** Set `DISPLAY_NAME` in `wrangler.toml` (up to 24 letters, digits, spaces and
+`. _ ' -`; never an address) and your row on https://makememoneynomistakes.ai/results shows it;
+without one it reads "Seller N". Results are a day late, in whole dollars, with no addresses.
 
 ## 7. Refresh only when sales paid for it
 
@@ -156,9 +181,10 @@ low, never high.
 
 - `src/index.ts`: the Worker (free topic list, token-guarded upload, the x402 paywall, the bundle,
   your private sales count).
-- `src/sales.ts`: sales per topic, your own wallets left out (step 7).
+- `src/sales.ts`: sales per topic, your own wallets left out, fee reads counted apart (step 7).
+- `src/fee.ts`: the fee terms (read once a day), the one-in-20 decision, the registration ("The fee").
 - `src/cors.ts`: the CORS headers for browser buyers, kept on every `/bundle` answer.
 - `refresh-check.mjs` and `refresh-costs.example.json`: the refresh-when-paid check (step 7).
-- `wrangler.toml`: public config only. Secrets: `PAY_TO`, `UPLOAD_TOKEN`, and on mainnet
+- `wrangler.toml`: public config only (`DISPLAY_NAME` for your results row). Secrets: `PAY_TO`, `UPLOAD_TOKEN`, and on mainnet
   `CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`.
 - `.dev.vars.example`: the values the deploy page asks for; copy it to `.dev.vars` for local runs.

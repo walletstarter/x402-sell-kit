@@ -29,3 +29,8 @@ DESCRIPTION = "Curated JSON bundles from several x402 sources, one call each."
 # OWN_WALLETS = "0xYourOtherWallet"
 # Optional: web origins whose pages may pay from a browser wallet, comma-separated (unset = no CORS).
 # CORS_ORIGINS = "https://app.makememoneynomistakes.ai"
+# Optional (v2): the name on your row at makememoneynomistakes.ai/results, up to 24 letters, digits, spaces
+# and . _ ' -. Rows never show an address; without a name yours reads "Seller N".
+# DISPLAY_NAME = "Night Owl Data"
+# Where the kit reads its fee terms and registers (README, "The fee"). Leave it alone.
+# MMNM_ORIGIN = "https://makememoneynomistakes.ai"

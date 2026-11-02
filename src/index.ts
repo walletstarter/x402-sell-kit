@@ -1,8 +1,10 @@
-// x402 resell worker: sells bundles you assembled, over x402, paid to YOUR wallet (PAY_TO).
+// x402 resell worker (sell kit v2): sells bundles you assembled, over x402, paid to YOUR wallet (PAY_TO).
 // Receive-only: it holds no wallet and signs nothing. Your agent buys the inputs elsewhere (for
 // example in an Open Commerce Pathways session, signing in its own wallet), turns them into a
-// bundle and uploads it here; buyers pay you per read. Nothing here belongs to
-// makememoneynomistakes.ai: you deploy it, you keep the income.
+// bundle and uploads it here; buyers pay you per read. You deploy it, you keep the income.
+// v2 (2026-11-02): one read in twenty is paid to makememoneynomistakes.ai instead of you (the 5% fee;
+// 0% for wallets grandfathered before the effective date), the kit registers itself so your wallet
+// gets a Pathways ledger and a results row, and DISPLAY_NAME labels that row. README, "The fee".
 import { Hono, type Context, type Next } from 'hono';
 import { cors } from 'hono/cors';
 import { paymentMiddleware, x402ResourceServer } from '@x402/hono';
@@ -11,10 +13,11 @@ import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { createFacilitatorConfig } from '@coinbase/x402';
 import { ALLOW_HEADERS, ALLOW_METHODS, allowedOrigins, allowOrigin, EXPOSE_HEADERS, keepCors, UPLOAD_ALLOW_HEADERS, UPLOAD_ALLOW_METHODS } from './cors';
+import { DEFAULT_MMNM_ORIGIN, FEE_TO, type FeeTerms, feeTerms, isFeeRead, KIT_VERSION, register } from './fee';
 import { countSale, readCount, salesSince } from './sales';
 
 interface Env {
-  BUNDLES: KVNamespace; // your bundles, one key per topic
+  BUNDLES: KVNamespace; // your bundles, one key per topic (and the kit's own counters and cached terms)
   PAY_TO: string; // your receiving wallet (public address)
   PRICE_USDC: string; // what one bundle read costs, e.g. "0.02"
   NETWORK: string; // "eip155:84532" (Base Sepolia) to test, "eip155:8453" (Base) for real
@@ -26,6 +29,8 @@ interface Env {
   CORS_ORIGINS?: string; // optional: comma-separated web origins whose pages may buy (browser wallets)
   DEFAULT_TOPIC?: string; // optional: the topic a bare GET /bundle serves (each bundle is also sold at /bundle/<topic>; README, step 5)
   OWN_WALLETS?: string; // optional: your own paying wallets, comma-separated; their reads are never counted as sales (README, step 7)
+  DISPLAY_NAME?: string; // optional: up to 24 characters; labels your row on makememoneynomistakes.ai/results (never an address)
+  MMNM_ORIGIN?: string; // optional: where the kit reads its fee terms and registers; the default is makememoneynomistakes.ai
 }
 
 interface BundleMeta {
@@ -48,6 +53,7 @@ function atomic(usdc: string): bigint | null {
 /** Checks the config; throws with a readable reason so a bad deploy fails loud. */
 function readConfig(env: Env): bigint {
   if (!ADDRESS.test(env.PAY_TO) || /^0x0{40}$/.test(env.PAY_TO)) throw new Error('PAY_TO must be your 0x wallet address');
+  if (env.PAY_TO.toLowerCase() === FEE_TO.toLowerCase()) throw new Error('PAY_TO must be your own wallet, not the fee address');
   if (env.NETWORK !== 'eip155:8453' && env.NETWORK !== 'eip155:84532') {
     throw new Error('NETWORK must be eip155:8453 (Base) or eip155:84532 (Base Sepolia)');
   }
@@ -56,6 +62,13 @@ function readConfig(env: Env): bigint {
   if (!env.UPLOAD_TOKEN || env.UPLOAD_TOKEN.length < 32) throw new Error('Set UPLOAD_TOKEN (32+ random characters) as a Worker secret');
   return charge;
 }
+
+const mmnmOrigin = (env: Env) => (env.MMNM_ORIGIN && /^https:\/\/[^/]+$/.test(env.MMNM_ORIGIN) ? env.MMNM_ORIGIN : DEFAULT_MMNM_ORIGIN);
+/** DISPLAY_NAME as makememoneynomistakes.ai will accept it: 1 to 24 letters, digits, spaces and . _ ' -, not an address. */
+const displayName = (env: Env): string | null => {
+  const name = (env.DISPLAY_NAME ?? '').replace(/\s+/g, ' ').trim();
+  return /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,23}$/u.test(name) && !/^0x/i.test(name) ? name : null;
+};
 
 function facilitator(env: Env): HTTPFacilitatorClient {
   if (env.NETWORK === 'eip155:8453') {
@@ -85,16 +98,18 @@ const app = new Hono<App>();
  */
 const topicOf = (c: { req: { query(name: string): string | undefined }; env: Env }) => c.req.query('topic') ?? c.env.DEFAULT_TOPIC ?? '';
 
-// One paywall per paid route, built on its first request from the Worker's env (env is only known
-// per request) and kept for the isolate's life: `GET /bundle` (the ?topic= form, or DEFAULT_TOPIC)
-// and one `GET /bundle/<topic>` per bundle. The Bazaar lists a route by its bare path, query dropped,
-// so `/bundle?topic=x` is never its own listing; `/bundle/x` lists each bundle on its own, with its
-// own description, and that is what README step 5 pays for.
+// One paywall per paid route and recipient, built on its first request from the Worker's env (env is
+// only known per request) and kept for the isolate's life: `GET /bundle` (the ?topic= form, or
+// DEFAULT_TOPIC) and one `GET /bundle/<topic>` per bundle, each in two forms: paid to you, and (one
+// read in twenty, when the terms say your wallet pays the fee) paid to FEE_TO. The Bazaar lists a
+// route by its bare path, query dropped, so `/bundle?topic=x` is never its own listing; `/bundle/x`
+// lists each bundle on its own, with its own description, and that is what README step 5 pays for.
 const paywalls = new Map<string, ReturnType<typeof paymentMiddleware>>();
 let server: x402ResourceServer | null = null;
 
-function paywallFor(env: Env, route: 'GET /bundle' | `GET /bundle/${string}`, topic: string): ReturnType<typeof paymentMiddleware> {
-  const have = paywalls.get(route);
+function paywallFor(env: Env, route: 'GET /bundle' | `GET /bundle/${string}`, topic: string, payTo: string): ReturnType<typeof paymentMiddleware> {
+  const key = `${route}|${payTo.toLowerCase()}`;
+  const have = paywalls.get(key);
   if (have) return have;
   const charge = readConfig(env);
   server ??= new x402ResourceServer(facilitator(env))
@@ -108,7 +123,7 @@ function paywallFor(env: Env, route: 'GET /bundle' | `GET /bundle/${string}`, to
           scheme: 'exact',
           price: `$${Number(charge) / 1e6}`,
           network: env.NETWORK as `${string}:${string}`,
-          payTo: env.PAY_TO,
+          payTo,
         },
         description: byQuery ? env.DESCRIPTION : `${env.DESCRIPTION} This route serves the ${topic} bundle.`,
         mimeType: 'application/json',
@@ -125,7 +140,7 @@ function paywallFor(env: Env, route: 'GET /bundle' | `GET /bundle/${string}`, to
     },
     server,
   );
-  paywalls.set(route, made);
+  paywalls.set(key, made);
   return made;
 }
 
@@ -168,19 +183,27 @@ app.use('/upload/*', async (c, next) => {
   return cors({ origin: (origin) => allowOrigin(origin, allowed), allowMethods: UPLOAD_ALLOW_METHODS.split(','), allowHeaders: UPLOAD_ALLOW_HEADERS.split(','), maxAge: 600 })(c, next);
 });
 
-// Free: what is on sale, so buyers (and the Bazaar) can see topics and freshness before paying.
+/** The fee terms for your wallet (README, "The fee"): cached in KV, read from makememoneynomistakes.ai at most daily. */
+const terms = (env: Env): Promise<FeeTerms> => feeTerms(env.BUNDLES, env.PAY_TO, mmnmOrigin(env));
+
+// Free: what is on sale, so buyers (and the Bazaar) can see topics and freshness before paying. Also
+// what makememoneynomistakes.ai reads when this kit registers: the wallet, the network, the version and the name.
 app.get('/', async (c) => {
   const list = await c.env.BUNDLES.list<BundleMeta>();
+  const fee = await terms(c.env).catch(() => null);
   return c.json({
     service: 'x402 resell worker',
+    kit_version: KIT_VERSION,
+    display_name: displayName(c.env),
     endpoint: '/bundle/<topic>',
     endpoints: ['/bundle/<topic>', '/bundle?topic=<topic>'],
     default_topic: c.env.DEFAULT_TOPIC ?? null,
     price_usdc: c.env.PRICE_USDC,
     network: c.env.NETWORK,
     pay_to: c.env.PAY_TO,
+    fee: fee ? { one_in: fee.fee_bps > 0 ? fee.one_in : 0, grandfathered: fee.grandfathered, effective_date: fee.effective_date, fee_to: fee.fee_bps > 0 ? FEE_TO : null } : null,
     topics: list.keys
-      .filter((k) => TOPIC.test(k.name)) // bundles only, not the sales counters (src/sales.ts)
+      .filter((k) => TOPIC.test(k.name)) // bundles only, not the counters or cached terms
       .map((k) => ({ topic: k.name, url: `/bundle/${k.name}`, updated_at: k.metadata?.updated_at ?? null })),
   });
 });
@@ -199,11 +222,12 @@ app.get('/stats', async (c) => {
       updated_at: k.metadata?.updated_at ?? null,
       reads_total: r.count,
       reads_since_update: salesSince(r.count, k.metadata?.reads_at_upload),
+      fee_reads: r.fee_reads,
       last_read_at: r.last_at,
     });
   }
   c.header('Cache-Control', 'no-store');
-  return c.json({ price_usdc: c.env.PRICE_USDC, topics });
+  return c.json({ price_usdc: c.env.PRICE_USDC, kit_version: KIT_VERSION, fee: await terms(c.env).catch(() => null), topics });
 });
 
 // Yours only: your agent uploads a bundle it assembled. Bearer UPLOAD_TOKEN.
@@ -224,6 +248,8 @@ app.put('/upload/:topic', async (c) => {
   // Remember the sales count at this upload: "sales since the last refresh" counts from here.
   const meta: BundleMeta = { updated_at, reads_at_upload: (await readCount(c.env.BUNDLES, topic)).count };
   await c.env.BUNDLES.put(topic, text, { metadata: meta });
+  // A kit with something to sell tells makememoneynomistakes.ai where it lives (at most weekly), in the background.
+  c.executionCtx.waitUntil(register(c.env.BUNDLES, new URL(c.req.url).origin, mmnmOrigin(c.env)));
   return c.json({ topic, updated_at, bytes: text.length });
 });
 
@@ -232,7 +258,11 @@ async function paid(c: Context<App>, next: Next, topic: string, route: 'GET /bun
   if (!TOPIC.test(topic) || (await c.env.BUNDLES.get(topic)) === null) {
     return c.json({ error: 'unknown topic; GET / lists them' }, 404);
   }
-  const paywall = paywallFor(c.env, route, topic);
+  // The fee (v2): when the terms say this wallet pays, one read in twenty of each topic is paid to
+  // makememoneynomistakes.ai instead of you. Decided from the topic's settled count before this read.
+  const fee = await terms(c.env);
+  const feeRead = isFeeRead((await readCount(c.env.BUNDLES, topic)).count, fee);
+  const paywall = paywallFor(c.env, route, topic, feeRead ? FEE_TO : c.env.PAY_TO);
   const res = await paywall(c, next);
   if (res && !c.finalized) c.res = res; // what Hono does with a returned Response
   // A failed settlement is answered with a fresh Response that carries none of the headers set
@@ -240,7 +270,10 @@ async function paid(c: Context<App>, next: Next, topic: string, route: 'GET /bun
   keepCors(c.res.headers, c.req.header('Origin'), allowedOrigins(c.env.CORS_ORIGINS));
   // Count the sale only once it settled: a 200 carrying the facilitator's receipt.
   const receipt = c.res.headers.get('PAYMENT-RESPONSE');
-  if (c.res.status === 200 && receipt) c.executionCtx.waitUntil(countSale(c.env.BUNDLES, topic, receipt, c.env.OWN_WALLETS));
+  if (c.res.status === 200 && receipt) {
+    c.executionCtx.waitUntil(countSale(c.env.BUNDLES, topic, receipt, c.env.OWN_WALLETS, new Date(), feeRead));
+    c.executionCtx.waitUntil(register(c.env.BUNDLES, new URL(c.req.url).origin, mmnmOrigin(c.env)));
+  }
 }
 
 /** Runs only after the buyer's payment verified; the payment settles only on this 200. */
